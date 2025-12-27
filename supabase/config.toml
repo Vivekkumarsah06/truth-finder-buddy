@@ -1,0 +1,4 @@
+project_id = "hmnnnknbczoxqfsvorix"
+
+[functions.analyze-article]
+verify_jwt = false
