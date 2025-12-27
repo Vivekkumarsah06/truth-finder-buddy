@@ -42,17 +42,67 @@ When analyzing, consider:
 Provide 3-6 specific findings and 2-4 actionable tips for the student.
 IMPORTANT: Return ONLY the JSON object, no additional text.`;
 
+// Validation constants
+const MAX_TEXT_LENGTH = 50000; // 50KB for article text
+const MAX_URL_LENGTH = 2048;
+const VALID_TYPES = ['url', 'text'];
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { content, type } = await req.json();
+    const body = await req.json();
+    const { content, type } = body;
 
-    if (!content) {
+    // Validate content exists and is a string
+    if (!content || typeof content !== 'string') {
       return new Response(
-        JSON.stringify({ error: 'Content is required' }),
+        JSON.stringify({ error: 'Content is required and must be a string' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Validate type parameter
+    if (type && !VALID_TYPES.includes(type)) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid type. Must be "url" or "text"' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Validate content length based on type
+    if (type === 'url') {
+      if (content.length > MAX_URL_LENGTH) {
+        return new Response(
+          JSON.stringify({ error: 'URL is too long. Maximum length is 2048 characters' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      // Validate URL format
+      try {
+        new URL(content);
+      } catch {
+        return new Response(
+          JSON.stringify({ error: 'Invalid URL format' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    } else {
+      if (content.length > MAX_TEXT_LENGTH) {
+        return new Response(
+          JSON.stringify({ error: 'Content is too large. Maximum length is 50,000 characters' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // Sanitize content - trim whitespace
+    const sanitizedContent = content.trim();
+    if (!sanitizedContent) {
+      return new Response(
+        JSON.stringify({ error: 'Content cannot be empty' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -67,10 +117,10 @@ Deno.serve(async (req) => {
     }
 
     const userMessage = type === 'url' 
-      ? `Analyze this article URL for credibility. Note: I can only see the URL, not the actual content. Assess based on the domain and URL structure, and explain what additional verification would be needed: ${content}`
-      : `Analyze this article text for credibility:\n\n${content}`;
+      ? `Analyze this article URL for credibility. Note: I can only see the URL, not the actual content. Assess based on the domain and URL structure, and explain what additional verification would be needed: ${sanitizedContent}`
+      : `Analyze this article text for credibility:\n\n${sanitizedContent}`;
 
-    console.log('Analyzing content, type:', type);
+    console.log('Analyzing content, type:', type, 'length:', sanitizedContent.length);
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
