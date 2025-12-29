@@ -1,5 +1,6 @@
 import { Shield, Search, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { UserMenu } from "@/components/UserMenu";
 
 interface HeroProps {
   onScrollToAnalyzer: () => void;
@@ -10,6 +11,11 @@ export function Hero({ onScrollToAnalyzer }: HeroProps) {
     <section className="relative min-h-[85vh] flex items-center justify-center overflow-hidden">
       {/* Background gradient */}
       <div className="absolute inset-0 hero-gradient opacity-95" />
+      
+      {/* User menu in top right */}
+      <div className="absolute top-4 right-4 z-20">
+        <UserMenu />
+      </div>
       
       {/* Floating orbs */}
       <div className="absolute top-20 left-10 w-72 h-72 bg-primary-foreground/10 rounded-full blur-3xl animate-float" />

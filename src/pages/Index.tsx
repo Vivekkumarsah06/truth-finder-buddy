@@ -6,12 +6,13 @@ import { TipsSection } from "@/components/TipsSection";
 import { Footer } from "@/components/Footer";
 import { RateLimitIndicator } from "@/components/RateLimitIndicator";
 import { useToast } from "@/hooks/use-toast";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface RateLimitInfo {
   remaining: number;
   limit: number;
   resetIn: number;
+  isAuthenticated: boolean;
 }
 
 const Index = () => {
@@ -20,6 +21,7 @@ const Index = () => {
   const [rateLimit, setRateLimit] = useState<RateLimitInfo | null>(null);
   const analyzerRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+  const { session } = useAuth();
 
   // Countdown timer for rate limit reset
   useEffect(() => {
@@ -29,7 +31,7 @@ const Index = () => {
       setRateLimit(prev => {
         if (!prev || prev.resetIn <= 1) {
           // Reset to full limit when timer expires
-          return { remaining: prev?.limit || 10, limit: prev?.limit || 10, resetIn: 0 };
+          return { remaining: prev?.limit || 10, limit: prev?.limit || 10, resetIn: 0, isAuthenticated: prev?.isAuthenticated || false };
         }
         return { ...prev, resetIn: prev.resetIn - 1 };
       });
@@ -37,6 +39,11 @@ const Index = () => {
 
     return () => clearInterval(interval);
   }, [rateLimit]);
+
+  // Reset rate limit display when auth state changes
+  useEffect(() => {
+    setRateLimit(null);
+  }, [session]);
 
   const scrollToAnalyzer = () => {
     analyzerRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -47,14 +54,21 @@ const Index = () => {
     setResult(null);
 
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      };
+
+      // Include auth token if user is logged in
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`;
+      }
+
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-article`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          },
+          headers,
           body: JSON.stringify({ content, type }),
         }
       );
@@ -63,8 +77,9 @@ const Index = () => {
       const limit = parseInt(response.headers.get('X-RateLimit-Limit') || '10', 10);
       const remaining = parseInt(response.headers.get('X-RateLimit-Remaining') || '10', 10);
       const resetIn = parseInt(response.headers.get('X-RateLimit-Reset') || '60', 10);
+      const isAuthenticated = response.headers.get('X-RateLimit-Authenticated') === 'true';
       
-      setRateLimit({ remaining, limit, resetIn });
+      setRateLimit({ remaining, limit, resetIn, isAuthenticated });
 
       const data = await response.json();
 
@@ -112,7 +127,8 @@ const Index = () => {
                 <RateLimitIndicator 
                   remaining={rateLimit.remaining} 
                   limit={rateLimit.limit} 
-                  resetIn={rateLimit.resetIn} 
+                  resetIn={rateLimit.resetIn}
+                  isAuthenticated={rateLimit.isAuthenticated}
                 />
               )}
               
