@@ -49,7 +49,8 @@ const VALID_TYPES = ['url', 'text'];
 
 // Rate limiting configuration
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
-const MAX_REQUESTS_PER_WINDOW = 10; // 10 requests per minute per IP
+const MAX_REQUESTS_ANONYMOUS = 2; // 2 requests per minute for anonymous users
+const MAX_REQUESTS_AUTHENTICATED = 10; // 10 requests per minute for authenticated users
 
 // In-memory rate limit store (resets on function cold start)
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
@@ -70,7 +71,7 @@ function getClientIP(req: Request): string {
   return `unknown-${ua.slice(0, 20)}-${lang.slice(0, 10)}`;
 }
 
-function checkRateLimit(clientIP: string): { allowed: boolean; remaining: number; resetIn: number } {
+function checkRateLimit(clientIP: string, maxRequests: number): { allowed: boolean; remaining: number; resetIn: number; limit: number } {
   const now = Date.now();
   const record = rateLimitStore.get(clientIP);
   
@@ -86,15 +87,44 @@ function checkRateLimit(clientIP: string): { allowed: boolean; remaining: number
   if (!record || now > record.resetTime) {
     // New window
     rateLimitStore.set(clientIP, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
-    return { allowed: true, remaining: MAX_REQUESTS_PER_WINDOW - 1, resetIn: RATE_LIMIT_WINDOW_MS };
+    return { allowed: true, remaining: maxRequests - 1, resetIn: RATE_LIMIT_WINDOW_MS, limit: maxRequests };
   }
   
-  if (record.count >= MAX_REQUESTS_PER_WINDOW) {
-    return { allowed: false, remaining: 0, resetIn: record.resetTime - now };
+  if (record.count >= maxRequests) {
+    return { allowed: false, remaining: 0, resetIn: record.resetTime - now, limit: maxRequests };
   }
   
   record.count++;
-  return { allowed: true, remaining: MAX_REQUESTS_PER_WINDOW - record.count, resetIn: record.resetTime - now };
+  return { allowed: true, remaining: maxRequests - record.count, resetIn: record.resetTime - now, limit: maxRequests };
+}
+
+// Check if request has valid auth token
+async function isAuthenticated(req: Request): Promise<boolean> {
+  const authHeader = req.headers.get('authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return false;
+  }
+  
+  const token = authHeader.replace('Bearer ', '');
+  // Skip if it's just the anon key
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
+  if (token === anonKey) {
+    return false;
+  }
+  
+  // Verify JWT token with Supabase
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'apikey': anonKey || '',
+      },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 Deno.serve(async (req) => {
@@ -102,22 +132,29 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Check if user is authenticated for higher rate limits
+  const authenticated = await isAuthenticated(req);
+  const maxRequests = authenticated ? MAX_REQUESTS_AUTHENTICATED : MAX_REQUESTS_ANONYMOUS;
+  
   // Rate limiting check
   const clientIP = getClientIP(req);
-  const rateLimit = checkRateLimit(clientIP);
+  const rateLimit = checkRateLimit(clientIP, maxRequests);
   
   const rateLimitHeaders = {
     ...corsHeaders,
-    'X-RateLimit-Limit': MAX_REQUESTS_PER_WINDOW.toString(),
+    'X-RateLimit-Limit': rateLimit.limit.toString(),
     'X-RateLimit-Remaining': rateLimit.remaining.toString(),
     'X-RateLimit-Reset': Math.ceil(rateLimit.resetIn / 1000).toString(),
+    'X-RateLimit-Authenticated': authenticated.toString(),
   };
   
   if (!rateLimit.allowed) {
-    console.log('Rate limit exceeded for IP:', clientIP);
+    console.log('Rate limit exceeded for IP:', clientIP, 'authenticated:', authenticated);
     return new Response(
       JSON.stringify({ 
-        error: 'Too many requests. Please wait before trying again.',
+        error: authenticated 
+          ? 'Too many requests. Please wait before trying again.'
+          : 'Rate limit exceeded. Sign in for 5x more API calls!',
         retryAfter: Math.ceil(rateLimit.resetIn / 1000)
       }),
       { 
