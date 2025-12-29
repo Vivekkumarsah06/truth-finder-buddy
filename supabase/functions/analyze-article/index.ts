@@ -262,7 +262,7 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify(analysisResult),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { headers: { ...rateLimitHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (error) {
     console.error('Error analyzing content:', error);
