@@ -1,17 +1,42 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { Hero } from "@/components/Hero";
 import { ArticleInput } from "@/components/ArticleInput";
 import { AnalysisResults, type AnalysisResult } from "@/components/AnalysisResults";
 import { TipsSection } from "@/components/TipsSection";
 import { Footer } from "@/components/Footer";
+import { RateLimitIndicator } from "@/components/RateLimitIndicator";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+
+interface RateLimitInfo {
+  remaining: number;
+  limit: number;
+  resetIn: number;
+}
 
 const Index = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [rateLimit, setRateLimit] = useState<RateLimitInfo | null>(null);
   const analyzerRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+
+  // Countdown timer for rate limit reset
+  useEffect(() => {
+    if (!rateLimit || rateLimit.remaining > 0 || rateLimit.resetIn <= 0) return;
+
+    const interval = setInterval(() => {
+      setRateLimit(prev => {
+        if (!prev || prev.resetIn <= 1) {
+          // Reset to full limit when timer expires
+          return { remaining: prev?.limit || 10, limit: prev?.limit || 10, resetIn: 0 };
+        }
+        return { ...prev, resetIn: prev.resetIn - 1 };
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [rateLimit]);
 
   const scrollToAnalyzer = () => {
     analyzerRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -22,16 +47,29 @@ const Index = () => {
     setResult(null);
 
     try {
-      const { data, error } = await supabase.functions.invoke('analyze-article', {
-        body: { content, type }
-      });
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-article`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ content, type }),
+        }
+      );
 
-      if (error) {
-        throw new Error(error.message);
-      }
+      // Extract rate limit headers
+      const limit = parseInt(response.headers.get('X-RateLimit-Limit') || '10', 10);
+      const remaining = parseInt(response.headers.get('X-RateLimit-Remaining') || '10', 10);
+      const resetIn = parseInt(response.headers.get('X-RateLimit-Reset') || '60', 10);
+      
+      setRateLimit({ remaining, limit, resetIn });
 
-      if (data.error) {
-        throw new Error(data.error);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Analysis failed');
       }
 
       setResult(data);
@@ -69,7 +107,15 @@ const Index = () => {
               </p>
             </div>
 
-            <div className="grid gap-8">
+            <div className="grid gap-6">
+              {rateLimit && (
+                <RateLimitIndicator 
+                  remaining={rateLimit.remaining} 
+                  limit={rateLimit.limit} 
+                  resetIn={rateLimit.resetIn} 
+                />
+              )}
+              
               <ArticleInput onAnalyze={handleAnalyze} isLoading={isLoading} />
 
               {result && <AnalysisResults result={result} />}
